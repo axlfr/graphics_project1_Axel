@@ -1,3 +1,5 @@
+// run in terminal: "g++ -O2 -o raytracer main.cpp -lm" then "./raytracer" to generate image.png
+
 #define _CRT_SECURE_NO_WARNINGS 1
 #include <vector>
 #include <cmath>
@@ -88,9 +90,31 @@ public:
 	// if there is an intersection, also computes the point of intersection P, 
 	// t>=0 the distance between the ray origin and P (i.e., the parameter along the ray)
 	// and the unit normal N
-	bool intersect(const Ray& ray, Vector& P, double &t, Vector& N) const {
-		 // TODO (lab 1) : compute the intersection (just true/false at the begining of lab 1, then P, t and N as well)
-		return false;
+	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
+		Vector OC = ray.O - C;
+		double a = dot(ray.u, ray.u);
+		double b = 2.0 * dot(ray.u, OC);
+		double c = dot(OC, OC) - R * R;
+		double delta = b * b - 4.0 * a * c;
+		if (delta < 0){
+			return false;
+		}
+		double sqrt_delta = std::sqrt(delta);
+		double t1 = (-b - sqrt_delta) / (2.0 * a);
+		double t2 = (-b + sqrt_delta) / (2.0 * a);
+		if (t1 > 0) {
+			t = t1;
+		} 
+		else if (t2 > 0) {
+			t = t2;
+		} 
+		else {
+			return false;
+		}
+		P = ray.O + t * ray.u;
+		N = P - C;
+		N.normalize();
+		return true;
 	}
 
 	double R;
@@ -123,46 +147,68 @@ public:
     // and the unit normal N. 
 	// Also returns the index of the object within the std::vector objects in object_id
 	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N, int &object_id) const  {
-
-		// TODO (lab 1): iterate through the objects and check the intersections with all of them, 
-		// and keep the closest intersection, i.e., the one if smallest positive value of t
-
-		return false;
+		bool found = false;
+		double t_min = 1e30;
+		for (int i = 0; i < objects.size(); i++) {
+			Vector P_tmp, N_tmp;
+			double t_tmp;
+			if (objects[i]->intersect(ray, P_tmp, t_tmp, N_tmp)) {
+				if (t_tmp < t_min) {
+					t_min = t_tmp;
+					P = P_tmp;
+					N = N_tmp;
+					t = t_tmp;
+					object_id = i;
+					found = true;
+				}
+			}
+		}
+		return found;
 	}
 
-
-	// return the radiance (color) along ray
+	
 	Vector getColor(const Ray& ray, int recursion_depth) {
 
 		if (recursion_depth >= max_light_bounce) return Vector(0, 0, 0);
-
-		// TODO (lab 1) : if intersect with ray, use the returned information to compute the color ; otherwise black 
+	
+		// if intersect with ray, use the returned information to compute the color ; otherwise black 
 		// in lab 1, the color only includes direct lighting with shadows
-
 		Vector P, N;
 		double t;
 		int object_id;
 		if (intersect(ray, P, t, N, object_id)) {
-
 			if (objects[object_id]->mirror) {
-
-				// return getColor in the reflected direction, with recursion_depth+1 (recursively)
+				Vector reflected_direction = ray.u - 2 * dot(ray.u, N) * N;
+				reflected_direction.normalize();
+				return getColor(Ray(P + 1e-4 * N, reflected_direction), recursion_depth + 1);
 			} // else
-
+	
 			if (objects[object_id]->transparent) { // optional
-
+	
 				// return getColor in the refraction direction, with recursion_depth+1 (recursively)
 			} // else
-
+	
 			// test if there is a shadow by sending a new ray
 			// if there is no shadow, compute the formula with dot products etc.
-
-
+			Vector L = light_position - P;
+			double d2 = dot(L, L);
+			Vector L_dir = L / sqrt(d2);
+			Ray shadow_ray(P + 1e-4 * N, L_dir);
+			Vector P_shadow, N_shadow;
+			double t_shadow;
+			int shadow_object_id;
+			if (intersect(shadow_ray, P_shadow, t_shadow, N_shadow, shadow_object_id)) {
+				double dist2_shadow = dot(P_shadow - P, P_shadow - P);
+				if (dist2_shadow <= d2) {
+					return Vector(0, 0, 0);
+				}
+			}
+			double cosine = std::max(0.0, dot(N, L_dir));
+			return objects[object_id]->albedo *
+				(light_intensity * cosine / (4 * M_PI * d2 * M_PI));
 			// TODO (lab 2) : add indirect lighting component with a recursive call
 		}
-
-		
-
+	
 		return Vector(0, 0, 0);
 	}
 
@@ -191,34 +237,35 @@ int main() {
 	Sphere floor(Vector(0, -1000, 0), 990, Vector(0.6, 0.5, 0.7));
 
 	Scene scene;
-	scene.camera_center = Vector(0, 0, 0);
+	scene.camera_center = Vector(0, 0, 55);
 	scene.light_position = Vector(-10,20,40);
 	scene.light_intensity = 3E7;
 	scene.fov = 60 * M_PI / 180.;
-	scene.gamma = 1.0;    // TODO (lab 1) : play with gamma ; typically, gamma = 2.2
+	scene.gamma = 2.2;    // play with gamma ; typically, gamma = 2.2
 	scene.max_light_bounce = 5;
 
 	scene.addObject(&center_sphere);
 
-	/*
+	
 	scene.addObject(&wall_left);
 	scene.addObject(&wall_right);
 	scene.addObject(&wall_front);
 	scene.addObject(&wall_behind);
 	scene.addObject(&ceiling);
 	scene.addObject(&floor);
-	*/
+	
 
 	std::vector<unsigned char> image(W * H * 3, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
 	for (int i = 0; i < H; i++) {
 		for (int j = 0; j < W; j++) {
-			Vector color;
-
-			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)			
-			Vector ray_direction(0., 0., -1);
-
+			Vector color;		
+			double x = j - W / 2.0 + 0.5;
+			double y = H / 2.0 - i - 0.5;
+			double z = - W / (2.0 * tan(scene.fov / 2.0));
+			Vector ray_direction(x, y, z);
+			ray_direction.normalize();
 			Ray ray(scene.camera_center, ray_direction);
 
 			// TODO (lab 2) : add Monte Carlo / averaging of random ray contributions here
